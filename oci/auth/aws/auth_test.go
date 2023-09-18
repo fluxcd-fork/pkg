@@ -24,6 +24,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/credentials"
+	"github.com/fluxcd/pkg/oci/auth"
 	"github.com/google/go-containerregistry/pkg/authn"
 	. "github.com/onsi/gomega"
 )
@@ -160,7 +161,7 @@ func TestGetLoginAuth(t *testing.T) {
 			cfg.Credentials = credentials.NewStaticCredentialsProvider("x", "y", "z")
 			ec.WithConfig(cfg)
 
-			a, err := ec.getLoginAuth(context.TODO(), "us-east-1")
+			a, err := ec.getOrCacheLoginAuth(context.TODO(), "us-east-1")
 			g.Expect(err != nil).To(Equal(tt.wantErr))
 			if tt.statusCode == http.StatusOK {
 				g.Expect(a).To(Equal(tt.wantAuthConfig))
@@ -224,7 +225,7 @@ func TestLogin(t *testing.T) {
 			cfg.Credentials = credentials.NewStaticCredentialsProvider("x", "y", "z")
 			ecrClient.WithConfig(cfg)
 
-			_, err := ecrClient.Login(context.TODO(), tt.autoLogin, tt.image)
+			_, err := ecrClient.Login(context.TODO(), auth.AuthOptions{RegistryURL: tt.image})
 			g.Expect(err != nil).To(Equal(tt.wantErr))
 
 			if tt.testOIDC {

@@ -22,13 +22,12 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"path"
 	"testing"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/cloud"
+	"github.com/fluxcd/pkg/oci/auth"
 	"github.com/google/go-containerregistry/pkg/authn"
-	"github.com/google/go-containerregistry/pkg/name"
 	. "github.com/onsi/gomega"
 )
 
@@ -84,7 +83,7 @@ func TestGetAzureLoginAuth(t *testing.T) {
 				WithTokenCredential(tt.tokenCredential).
 				WithScheme("http")
 
-			auth, err := c.getLoginAuth(context.TODO(), srv.URL)
+			auth, err := c.getOrCacheLoginAuth(context.TODO(), srv.URL)
 			g.Expect(err != nil).To(Equal(tt.wantErr))
 			if tt.statusCode == http.StatusOK {
 				g.Expect(auth).To(Equal(tt.wantAuthConfig))
@@ -179,15 +178,15 @@ func TestLogin(t *testing.T) {
 			// Construct an image repo name against the test server.
 			u, err := url.Parse(srv.URL)
 			g.Expect(err).ToNot(HaveOccurred())
-			image := path.Join(u.Host, "foo/bar:v1")
-			ref, err := name.ParseReference(image)
-			g.Expect(err).ToNot(HaveOccurred())
+			// image := path.Join(u.Host, "foo/bar:v1")
+			// ref, err := name.ParseReference(image)
+			// g.Expect(err).ToNot(HaveOccurred())
 
 			ac := NewClient().
 				WithTokenCredential(&FakeTokenCredential{Token: "foo"}).
 				WithScheme("http")
 
-			_, err = ac.Login(context.TODO(), tt.autoLogin, u.Host, ref)
+			_, err = ac.Login(context.TODO(), auth.AuthOptions{RegistryURL: u.Host})
 			g.Expect(err != nil).To(Equal(tt.wantErr))
 
 			if tt.testOIDC {

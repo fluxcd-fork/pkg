@@ -24,14 +24,15 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/ecr"
 	"github.com/google/go-containerregistry/pkg/authn"
-	"sigs.k8s.io/controller-runtime/pkg/log"
 
-	"github.com/fluxcd/pkg/oci"
+	"github.com/fluxcd/pkg/cache"
+	"github.com/fluxcd/pkg/oci/auth"
 )
 
 var registryPartRe = regexp.MustCompile(`([0-9+]*).dkr.ecr.([^/.]*)\.(amazonaws\.com[.cn]*)`)
@@ -51,8 +52,11 @@ func ParseRegistry(registry string) (accountId, awsEcrRegion string, ok bool) {
 // authorization information.
 type Client struct {
 	config *aws.Config
+	cache  *cache.Cache
 	mu     sync.Mutex
 }
+
+var _ auth.Client = &Client{}
 
 // NewClient creates a new empty ECR client.
 // NOTE: In order to avoid breaking the auth API with aws-sdk-go-v2's default
@@ -64,12 +68,21 @@ func NewClient() *Client {
 }
 
 // WithConfig allows setting the client config if it's uninitialized.
-func (c *Client) WithConfig(cfg *aws.Config) {
+func (c *Client) WithConfig(cfg *aws.Config) *Client {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.config == nil {
 		c.config = cfg
 	}
+	return c
+}
+
+func (c *Client) WithCache(cache *cache.Cache) *Client {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.cache = cache
+	return c
 }
 
 // getLoginAuth obtains authentication for ECR given the
@@ -78,7 +91,7 @@ func (c *Client) WithConfig(cfg *aws.Config) {
 // be the case if it's running in EKS, and may need additional setup
 // otherwise (visit https://aws.github.io/aws-sdk-go-v2/docs/configuring-sdk/
 // as a starting point).
-func (c *Client) getLoginAuth(ctx context.Context, awsEcrRegion string) (authn.AuthConfig, error) {
+func (c *Client) getLoginAuth(ctx context.Context, awsEcrRegion string) (authn.AuthConfig, time.Duration, error) {
 	// No caching of tokens is attempted; the quota for getting an
 	// auth token is high enough that getting a token every time you
 	// scan an image is viable for O(500) images per region. See
@@ -94,7 +107,7 @@ func (c *Client) getLoginAuth(ctx context.Context, awsEcrRegion string) (authn.A
 		cfg, err = config.LoadDefaultConfig(ctx, config.WithRegion(awsEcrRegion))
 		if err != nil {
 			c.mu.Unlock()
-			return authConfig, fmt.Errorf("failed to load default configuration: %w", err)
+			return authConfig, 0, fmt.Errorf("failed to load default configuration: %w", err)
 		}
 		c.config = &cfg
 	}
@@ -105,61 +118,121 @@ func (c *Client) getLoginAuth(ctx context.Context, awsEcrRegion string) (authn.A
 	// pass nil input.
 	ecrToken, err := ecrService.GetAuthorizationToken(ctx, nil)
 	if err != nil {
-		return authConfig, err
+		return authConfig, 0, err
 	}
 
 	// Validate the authorization data.
 	if len(ecrToken.AuthorizationData) == 0 {
-		return authConfig, errors.New("no authorization data")
+		return authConfig, 0, errors.New("no authorization data")
 	}
 	if ecrToken.AuthorizationData[0].AuthorizationToken == nil {
-		return authConfig, fmt.Errorf("no authorization token")
-	}
-	token, err := base64.StdEncoding.DecodeString(*ecrToken.AuthorizationData[0].AuthorizationToken)
-	if err != nil {
-		return authConfig, err
+		return authConfig, 0, fmt.Errorf("no authorization token")
 	}
 
+	authData := *&ecrToken.AuthorizationData[0]
+	token, err := base64.StdEncoding.DecodeString(*authData.AuthorizationToken)
+	if err != nil {
+		return authConfig, 0, err
+	}
 	tokenSplit := strings.Split(string(token), ":")
 	// Validate the tokens.
 	if len(tokenSplit) != 2 {
-		return authConfig, fmt.Errorf("invalid authorization token, expected the token to have two parts separated by ':', got %d parts", len(tokenSplit))
+		return authConfig, 0, fmt.Errorf("invalid authorization token, expected the token to have two parts separated by ':', got %d parts", len(tokenSplit))
 	}
+
 	authConfig = authn.AuthConfig{
 		Username: tokenSplit[0],
 		Password: tokenSplit[1],
 	}
+	expiresIn := authData.ExpiresAt.Sub(time.Now())
+	return authConfig, expiresIn, nil
+}
+
+// getOrCacheLoginAuth returns the authentication material from the cache if
+// found, or fetches it from upstream and caches it.
+func (c *Client) getOrCacheLoginAuth(ctx context.Context, awsEcrRegion string) (authn.AuthConfig, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	var authConfig authn.AuthConfig
+	var err error
+	var expiresIn time.Duration
+
+	retrieved, ok := c.cache.Get(awsEcrRegion)
+	if ok {
+		authConfig = retrieved.(authn.AuthConfig)
+	} else {
+		authConfig, expiresIn, err = c.getLoginAuth(ctx, awsEcrRegion)
+		if err != nil {
+			return authConfig, err
+		}
+		c.cache.Set(awsEcrRegion, authConfig, expiresIn)
+	}
 	return authConfig, nil
 }
 
-// Login attempts to get the authentication material for ECR.
-func (c *Client) Login(ctx context.Context, autoLogin bool, image string) (authn.Authenticator, error) {
-	if autoLogin {
-		log.FromContext(ctx).Info("logging in to AWS ECR for " + image)
-		_, awsEcrRegion, ok := ParseRegistry(image)
-		if !ok {
-			return nil, errors.New("failed to parse AWS ECR image, invalid ECR image")
-		}
+// Login attempts to get the authentication material for ECR. If the client
+// is configured with a cache, then the authentication material is cached
+// for a specific TTL as described by the registry server.
+func (c *Client) Login(ctx context.Context, opts auth.AuthOptions) (authn.Authenticator, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 
-		authConfig, err := c.getLoginAuth(ctx, awsEcrRegion)
-		if err != nil {
-			return nil, err
-		}
-
-		auth := authn.FromConfig(authConfig)
-		return auth, nil
+	_, awsEcrRegion, ok := ParseRegistry(opts.RegistryURL)
+	if !ok {
+		return nil, errors.New("failed to parse AWS ECR url, invalid ECR url")
 	}
-	return nil, fmt.Errorf("ECR authentication failed: %w", oci.ErrUnconfiguredProvider)
+
+	var authConfig authn.AuthConfig
+	var err error
+	if c.cache == nil {
+		authConfig, _, err = c.getLoginAuth(ctx, awsEcrRegion)
+	} else {
+		authConfig, err = c.getOrCacheLoginAuth(ctx, awsEcrRegion)
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	auth := authn.FromConfig(authConfig)
+	return auth, nil
+}
+
+// Logout evicts the authentication material for the provided authentication
+// options from the cache.
+func (c *Client) Logout(opts auth.AuthOptions) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.cache == nil {
+		return nil
+	}
+
+	_, awsEcrRegion, ok := ParseRegistry(opts.RegistryURL)
+	if !ok {
+		return errors.New("failed to parse AWS ECR url, invalid ECR url")
+	}
+	c.cache.Delete(awsEcrRegion)
+	return nil
 }
 
 // OIDCLogin attempts to get the authentication material for ECR.
 func (c *Client) OIDCLogin(ctx context.Context, registryURL string) (authn.Authenticator, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
 	_, awsEcrRegion, ok := ParseRegistry(registryURL)
 	if !ok {
 		return nil, errors.New("failed to parse AWS ECR image, invalid ECR image")
 	}
 
-	authConfig, err := c.getLoginAuth(ctx, awsEcrRegion)
+	var authConfig authn.AuthConfig
+	var err error
+	if c.cache == nil {
+		authConfig, _, err = c.getLoginAuth(ctx, awsEcrRegion)
+	} else {
+		authConfig, err = c.getOrCacheLoginAuth(ctx, awsEcrRegion)
+	}
 	if err != nil {
 		return nil, err
 	}

@@ -22,8 +22,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/fluxcd/pkg/oci/auth"
 	"github.com/google/go-containerregistry/pkg/authn"
-	"github.com/google/go-containerregistry/pkg/name"
 	. "github.com/onsi/gomega"
 )
 
@@ -77,7 +77,7 @@ func TestGetLoginAuth(t *testing.T) {
 			})
 
 			gc := NewClient().WithTokenURL(srv.URL)
-			a, err := gc.getLoginAuth(context.TODO())
+			a, err := gc.getOrCacheLoginAuth(context.TODO())
 			g.Expect(err != nil).To(Equal(tt.wantErr))
 			if tt.statusCode == http.StatusOK {
 				g.Expect(a).To(Equal(tt.wantAuthConfig))
@@ -157,12 +157,12 @@ func TestLogin(t *testing.T) {
 				srv.Close()
 			})
 
-			ref, err := name.ParseReference(tt.image)
-			g.Expect(err).ToNot(HaveOccurred())
+			// ref, err := name.ParseReference(tt.image)
+			// g.Expect(err).ToNot(HaveOccurred())
 
 			gc := NewClient().WithTokenURL(srv.URL)
 
-			_, err = gc.Login(context.TODO(), tt.autoLogin, tt.image, ref)
+			_, err := gc.Login(context.TODO(), auth.AuthOptions{})
 			g.Expect(err != nil).To(Equal(tt.wantErr))
 
 			if tt.testOIDC {

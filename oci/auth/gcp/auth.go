@@ -23,12 +23,14 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/google/go-containerregistry/pkg/authn"
-	"github.com/google/go-containerregistry/pkg/name"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
-	"github.com/fluxcd/pkg/oci"
+	"github.com/fluxcd/pkg/cache"
+	"github.com/fluxcd/pkg/oci/auth"
 )
 
 type gceToken struct {
@@ -49,7 +51,11 @@ func ValidHost(host string) bool {
 // authorization information.
 type Client struct {
 	tokenURL string
+	cache    *cache.Cache
+	mu       *sync.Mutex
 }
+
+var _ auth.Client = &Client{}
 
 // NewClient creates a new GCR client with default configurations.
 func NewClient() *Client {
@@ -62,16 +68,24 @@ func (c *Client) WithTokenURL(url string) *Client {
 	return c
 }
 
+func (c *Client) WithCache(cache *cache.Cache) *Client {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.cache = cache
+	return c
+}
+
 // getLoginAuth obtains authentication by getting a token from the metadata API
 // on GCP. This assumes that the pod has right to pull the image which would be
 // the case if it is hosted on GCP. It works with both service account and
 // workload identity enabled clusters.
-func (c *Client) getLoginAuth(ctx context.Context) (authn.AuthConfig, error) {
+func (c *Client) getLoginAuth(ctx context.Context) (authn.AuthConfig, time.Duration, error) {
 	var authConfig authn.AuthConfig
 
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, c.tokenURL, nil)
 	if err != nil {
-		return authConfig, err
+		return authConfig, 0, err
 	}
 
 	request.Header.Add("Metadata-Flavor", "Google")
@@ -79,48 +93,94 @@ func (c *Client) getLoginAuth(ctx context.Context) (authn.AuthConfig, error) {
 	client := &http.Client{}
 	response, err := client.Do(request)
 	if err != nil {
-		return authConfig, err
+		return authConfig, 0, err
 	}
 	defer response.Body.Close()
 	defer io.Copy(io.Discard, response.Body)
 
 	if response.StatusCode != http.StatusOK {
-		return authConfig, fmt.Errorf("unexpected status from metadata service: %s", response.Status)
+		return authConfig, 0, fmt.Errorf("unexpected status from metadata service: %s", response.Status)
 	}
 
 	var accessToken gceToken
 	decoder := json.NewDecoder(response.Body)
 	if err := decoder.Decode(&accessToken); err != nil {
-		return authConfig, err
+		return authConfig, 0, err
 	}
 
 	authConfig = authn.AuthConfig{
 		Username: "oauth2accesstoken",
 		Password: accessToken.AccessToken,
 	}
+	return authConfig, time.Duration(accessToken.ExpiresIn), nil
+}
+
+// getOrCacheLoginAuth returns the authentication material from the cache if
+// found, or fetches it from upstream and caches it.
+func (c *Client) getOrCacheLoginAuth(ctx context.Context) (authn.AuthConfig, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	var authConfig authn.AuthConfig
+	var err error
+	var expiresIn time.Duration
+
+	retrieved, ok := c.cache.Get(c.tokenURL)
+	if ok {
+		authConfig = retrieved.(authn.AuthConfig)
+	} else {
+		authConfig, expiresIn, err = c.getLoginAuth(ctx)
+		if err != nil {
+			return authConfig, err
+		}
+		c.cache.Set(c.tokenURL, authConfig, expiresIn)
+	}
 	return authConfig, nil
 }
 
 // Login attempts to get the authentication material for GCR. The caller can
-// ensure that the passed image is a valid GCR image using ValidHost().
-func (c *Client) Login(ctx context.Context, autoLogin bool, image string, ref name.Reference) (authn.Authenticator, error) {
-	if autoLogin {
-		log.FromContext(ctx).Info("logging in to GCP GCR for " + image)
-		authConfig, err := c.getLoginAuth(ctx)
-		if err != nil {
-			log.FromContext(ctx).Info("error logging into GCP " + err.Error())
-			return nil, err
-		}
-
-		auth := authn.FromConfig(authConfig)
-		return auth, nil
+// ensure that the passed image is a valid GCR image using ValidHost(). If the
+// client is configured with a cache, then the authentication material is cached
+// using the token URL as the key.
+func (c *Client) Login(ctx context.Context, _ auth.AuthOptions) (authn.Authenticator, error) {
+	var authConfig authn.AuthConfig
+	var err error
+	if c.cache == nil {
+		authConfig, _, err = c.getLoginAuth(ctx)
+	} else {
+		authConfig, err = c.getOrCacheLoginAuth(ctx)
 	}
-	return nil, fmt.Errorf("GCR authentication failed: %w", oci.ErrUnconfiguredProvider)
+	if err != nil {
+		return nil, err
+	}
+
+	auth := authn.FromConfig(authConfig)
+	return auth, nil
+}
+
+// Logout evicts the authentication material for the provided authentication
+// options from the cache.
+func (c *Client) Logout(opts auth.AuthOptions) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.cache == nil {
+		return nil
+	}
+
+	c.cache.Delete(c.tokenURL)
+	return nil
 }
 
 // OIDCLogin attempts to get the authentication material for GCR from the token url set in the client.
 func (c *Client) OIDCLogin(ctx context.Context) (authn.Authenticator, error) {
-	authConfig, err := c.getLoginAuth(ctx)
+	var authConfig authn.AuthConfig
+	var err error
+	if c.cache == nil {
+		authConfig, _, err = c.getLoginAuth(ctx)
+	} else {
+		authConfig, err = c.getOrCacheLoginAuth(ctx)
+	}
 	if err != nil {
 		log.FromContext(ctx).Info("error logging into GCP " + err.Error())
 		return nil, err
