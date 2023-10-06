@@ -137,16 +137,16 @@ func NormalizeUnstructuredWithScheme(object *unstructured.Unstructured, scheme *
 		object.Object = normalizedObject.Object
 	}
 
-	// Ensure the object has an empty creation timestamp, to avoid
-	// issues with the Kubernetes API server rejecting the object
-	// or causing any spurious diffs.
-	unstructured.SetNestedField(object.Object, nil, "metadata", "creationTimestamp")
-
-	// To ensure kstatus continues to work with CRDs, we need to keep the
-	// status field for CRDs.
-	if !IsCRD(object) {
-		unstructured.RemoveNestedField(object.Object, "status")
-	}
+	//// Ensure the object has an empty creation timestamp, to avoid
+	//// issues with the Kubernetes API server rejecting the object
+	//// or causing any spurious diffs.
+	//unstructured.SetNestedField(object.Object, nil, "metadata", "creationTimestamp")
+	//
+	//// To ensure kstatus continues to work with CRDs, we need to keep the
+	//// status field for CRDs.
+	//if !IsCRD(object) {
+	//	unstructured.RemoveNestedField(object.Object, "status")
+	//}
 
 	return nil
 }
