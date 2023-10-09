@@ -39,9 +39,7 @@ func GetCredentials(ctx context.Context, url string, provider string, authOption
 
 	switch provider {
 	case auth.AZURE_PROVIDER:
-		configurationEnvironment := azure.GetCloudConfiguration(url)
-
-		provider := azure.NewProvider(configurationEnvironment)
+		provider := azure.NewProvider()
 		armToken, err := provider.GetResourceManagerToken(ctx)
 		if err != nil {
 			return nil, err
@@ -52,7 +50,7 @@ func GetCredentials(ctx context.Context, url string, provider string, authOption
 		expiresIn = armToken.ExpiresOn.UTC().Sub(time.Now().UTC())
 	case auth.GCP_PROVIDER:
 		provider := gcp.NewProvider()
-		saToken, err := provider.GetWorkloadIdentityToken(ctx)
+		saToken, err := provider.GetServiceAccountToken(ctx)
 		if err != nil {
 			return nil, err
 		}

@@ -1,3 +1,19 @@
+/*
+Copyright 2023 The Flux authors
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 package aws
 
 import (
@@ -10,6 +26,7 @@ import (
 // Provider is an authentication provider for AWS.
 type Provider struct {
 	optFns []func(*config.LoadOptions) error
+	config *aws.Config
 }
 
 type ProviderOptFunc func(*Provider)
@@ -28,8 +45,16 @@ func WithRegion(region string) ProviderOptFunc {
 	}
 }
 
-func (p *Provider) WithOptFns(optFns []func(*config.LoadOptions) error) {
-	p.optFns = append(p.optFns, optFns...)
+func WithOptFns(optFns []func(*config.LoadOptions) error) ProviderOptFunc {
+	return func(p *Provider) {
+		p.optFns = append(p.optFns, optFns...)
+	}
+}
+
+func WithConfig(config aws.Config) ProviderOptFunc {
+	return func(p *Provider) {
+		p.config = &config
+	}
 }
 
 // GetConfig returns the default config constructed using any options that the
@@ -38,6 +63,9 @@ func (p *Provider) WithOptFns(optFns []func(*config.LoadOptions) error) {
 // credentials. The returned config object can be used to fetch tokens to access
 // particular AWS services.
 func (p *Provider) GetConfig(ctx context.Context) (aws.Config, error) {
+	if p.config != nil {
+		return *p.config, nil
+	}
 	cfg, err := config.LoadDefaultConfig(ctx, p.optFns...)
 	return cfg, err
 }

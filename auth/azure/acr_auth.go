@@ -1,3 +1,19 @@
+/*
+Copyright 2023 The Flux authors
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 package azure
 
 import (
@@ -20,20 +36,20 @@ import (
 
 // GetACRAuthConfig returns an AuthConfig that contains the credentials
 // required to authenticate against ECR to access the provided image.
-func GetACRAuthConfig(ctx context.Context, image string, authOptions *auth.AuthOptions) (authn.AuthConfig, time.Duration, error) {
+func GetACRAuthConfig(ctx context.Context, image string, authOptions *auth.AuthOptions,
+	providerOpts ...ProviderOptFunc) (authn.AuthConfig, time.Duration, error) {
 	var authConfig authn.AuthConfig
 	var expiresIn time.Duration
 
-	configurationEnvironment := GetCloudConfiguration(image)
-
-	provider := NewProvider(configurationEnvironment)
+	providerOpts = append(providerOpts, getCloudConfiguration(image))
+	provider := NewProvider(providerOpts...)
 	armToken, err := provider.GetResourceManagerToken(ctx)
 	if err != nil {
 		return authConfig, expiresIn, err
 	}
 
 	ex := newExchanger(image)
-	accessToken, err := ex.ExchangeACRAccessToken(string(armToken.Token))
+	refreshToken, err := ex.ExchangeACRAccessToken(string(armToken.Token))
 	if err != nil {
 		return authConfig, expiresIn, fmt.Errorf("failed to exchange token: %w", err)
 	}
@@ -42,9 +58,9 @@ func GetACRAuthConfig(ctx context.Context, image string, authOptions *auth.AuthO
 		// This is the acr username used by Azure
 		// See documentation: https://docs.microsoft.com/en-us/azure/container-registry/container-registry-authentication?tabs=azure-cli#az-acr-login-with---expose-token
 		Username: "00000000-0000-0000-0000-000000000000",
-		Password: accessToken,
+		Password: refreshToken,
 	}
-	expiresIn, err = getExpirationFromJWT(accessToken)
+	expiresIn, err = getExpirationFromJWT(refreshToken)
 	if err != nil {
 		return authConfig, expiresIn, fmt.Errorf("failed to determine token cache ttl: %w", err)
 	}
@@ -52,9 +68,9 @@ func GetACRAuthConfig(ctx context.Context, image string, authOptions *auth.AuthO
 	return authConfig, expiresIn, nil
 }
 
-// GetCloudConfiguration returns the cloud configuration based on the registry URL.
+// getCloudConfiguration returns the cloud configuration based on the registry URL.
 // List from https://github.com/Azure/azure-sdk-for-go/blob/main/sdk/containers/azcontainerregistry/cloud_config.go#L16
-func GetCloudConfiguration(url string) ProviderOptFunc {
+func getCloudConfiguration(url string) ProviderOptFunc {
 	switch {
 	case strings.HasSuffix(url, ".azurecr.cn"):
 		return WithAzureChinaScope()
@@ -131,16 +147,16 @@ func (e *exchanger) ExchangeACRAccessToken(armToken string) (string, error) {
 	if err = json.Unmarshal(b, &tokenResp); err != nil {
 		return "", fmt.Errorf("failed to decode the response: %w, response body: %s", err, string(b))
 	}
-	return tokenResp.AccessToken, nil
+	return tokenResp.RefreshToken, nil
 }
 
 // getExpirationFromJWT decodes the provided JWT and returns value
 // of the `exp` key from the token claims.
 func getExpirationFromJWT(tokenString string) (time.Duration, error) {
-	token, err := jwt.ParseWithClaims(tokenString, &jwt.RegisteredClaims{}, func(token *jwt.Token) (interface{}, error) {
-		// we don't care about verifying the JWT signature.
-		return nil, nil
-	})
+	parser := jwt.NewParser()
+	// we don't care about verifying the JWT, we just want to extract the `exp`
+	// attribute from the token.
+	token, _, err := parser.ParseUnverified(tokenString, &jwt.RegisteredClaims{})
 	if err != nil {
 		return 0, err
 	}

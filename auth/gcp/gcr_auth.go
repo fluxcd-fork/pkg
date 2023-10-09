@@ -1,3 +1,18 @@
+/*
+Copyright 2023 The Flux authors
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+	http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
 package gcp
 
 import (
@@ -10,12 +25,12 @@ import (
 
 // GetGCRAuthConfig returns an AuthConfig that contains the credentials
 // required to authenticate against ECR to access the provided image.
-func GetGCRAuthConfig(ctx context.Context, authOptions *auth.AuthOptions) (authn.AuthConfig, time.Duration, error) {
+func GetGCRAuthConfig(ctx context.Context, authOptions *auth.AuthOptions, providerOpts ...ProviderOptFunc) (authn.AuthConfig, time.Duration, error) {
 	var authConfig authn.AuthConfig
 	var expiresIn time.Duration
 
-	provider := NewProvider()
-	saToken, err := provider.GetWorkloadIdentityToken(ctx)
+	provider := NewProvider(providerOpts...)
+	saToken, err := provider.GetServiceAccountToken(ctx)
 	if err != nil {
 		return authConfig, expiresIn, err
 	}
@@ -24,7 +39,7 @@ func GetGCRAuthConfig(ctx context.Context, authOptions *auth.AuthOptions) (authn
 		Username: "oauth2accesstoken",
 		Password: saToken.AccessToken,
 	}
-	expiresIn = time.Duration(saToken.ExpiresIn)
+	expiresIn = time.Second * time.Duration(saToken.ExpiresIn)
 
 	return authConfig, expiresIn, nil
 }

@@ -1,3 +1,19 @@
+/*
+Copyright 2023 The Flux authors
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 package gcp
 
 import (
@@ -41,11 +57,12 @@ type ServiceAccountToken struct {
 	TokenType   string `json:"token_type"`
 }
 
-// GetWorkloadIdentityToken fetches the token for the service account that the
-// Pod is configured to run as, using Workload Identity. The token is fetched by
-// reaching out to the GKE metadata server which runs on each node (if Wokload
-// Identity is enabled). Ref: https://cloud.google.com/kubernetes-engine/docs/concepts/workload-identity
-func (p *Provider) GetWorkloadIdentityToken(ctx context.Context) (*ServiceAccountToken, error) {
+// GetServiceAccountToken fetches the access token for the service account
+// that the Pod is configured to run as, using Workload Identity.
+// Ref: https://cloud.google.com/kubernetes-engine/docs/concepts/workload-identity
+// The Kubernetes service account must be bound to a GCP service account with
+// the appropriate permissions.
+func (p *Provider) GetServiceAccountToken(ctx context.Context) (*ServiceAccountToken, error) {
 	if p.tokenURL == "" {
 		p.tokenURL = GCP_TOKEN_URL
 	}
@@ -69,11 +86,11 @@ func (p *Provider) GetWorkloadIdentityToken(ctx context.Context) (*ServiceAccoun
 		return nil, fmt.Errorf("unexpected status from metadata service: %s", response.Status)
 	}
 
-	var accessToken *ServiceAccountToken
+	var accessToken ServiceAccountToken
 	decoder := json.NewDecoder(response.Body)
-	if err := decoder.Decode(accessToken); err != nil {
+	if err := decoder.Decode(&accessToken); err != nil {
 		return nil, err
 	}
 
-	return accessToken, nil
+	return &accessToken, nil
 }

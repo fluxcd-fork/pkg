@@ -1,3 +1,19 @@
+/*
+Copyright 2023 The Flux authors
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 package aws
 
 import (
@@ -30,15 +46,18 @@ func ParseRegistry(registry string) (accountId, awsEcrRegion string, ok bool) {
 
 // GetECRAuthConfig returns an AuthConfig that contains the credentials
 // required to authenticate against ECR to access the provided image.
-func GetECRAuthConfig(ctx context.Context, image string, authOptions *auth.AuthOptions) (authn.AuthConfig, time.Duration, error) {
+func GetECRAuthConfig(ctx context.Context, image string, authOptions *auth.AuthOptions,
+	providerOpts ...ProviderOptFunc) (authn.AuthConfig, time.Duration, error) {
 	var authConfig authn.AuthConfig
 	var expiresIn time.Duration
+
 	_, awsEcrRegion, ok := ParseRegistry(image)
 	if !ok {
 		return authConfig, expiresIn, errors.New("failed to parse AWS ECR image, invalid ECR image")
 	}
+	providerOpts = append(providerOpts, WithRegion(awsEcrRegion))
 
-	provider := NewProvider(WithRegion(awsEcrRegion))
+	provider := NewProvider(providerOpts...)
 	cfg, err := provider.GetConfig(ctx)
 	if err != nil {
 		return authConfig, expiresIn, err
@@ -74,6 +93,9 @@ func GetECRAuthConfig(ctx context.Context, image string, authOptions *auth.AuthO
 	authConfig = authn.AuthConfig{
 		Username: tokenSplit[0],
 		Password: tokenSplit[1],
+	}
+	if authData.ExpiresAt == nil {
+		return authConfig, expiresIn, fmt.Errorf("no expiration time")
 	}
 	expiresIn = authData.ExpiresAt.Sub(time.Now())
 
