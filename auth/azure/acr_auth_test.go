@@ -34,7 +34,7 @@ import (
 	. "github.com/onsi/gomega"
 )
 
-func TestGetACRAuthConfig(t *testing.T) {
+func TestProvider_GetACRAuthConfig(t *testing.T) {
 	g := NewWithT(t)
 
 	expiresAt := time.Now().UTC().Add(time.Hour)
@@ -93,7 +93,8 @@ func TestGetACRAuthConfig(t *testing.T) {
 			t.Cleanup(func() {
 				srv.Close()
 			})
-			auth, expiry, err := GetACRAuthConfig(context.TODO(), srv.URL, nil, WithCredential(tt.tokenCredential))
+			provider := NewProvider(WithCredential(tt.tokenCredential))
+			auth, expiry, err := provider.GetACRAuthConfig(context.TODO(), srv.URL)
 			if tt.wantErr {
 				g.Expect(err).To(HaveOccurred())
 			} else {

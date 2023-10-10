@@ -19,18 +19,16 @@ import (
 	"context"
 	"time"
 
-	"github.com/fluxcd/pkg/auth"
 	"github.com/google/go-containerregistry/pkg/authn"
 )
 
 // GetGCRAuthConfig returns an AuthConfig that contains the credentials
 // required to authenticate against ECR to access the provided image.
-func GetGCRAuthConfig(ctx context.Context, authOptions *auth.AuthOptions, providerOpts ...ProviderOptFunc) (authn.AuthConfig, time.Duration, error) {
+func (p *Provider) GetGCRAuthConfig(ctx context.Context) (authn.AuthConfig, time.Duration, error) {
 	var authConfig authn.AuthConfig
 	var expiresIn time.Duration
 
-	provider := NewProvider(providerOpts...)
-	saToken, err := provider.GetServiceAccountToken(ctx)
+	saToken, err := p.GetServiceAccountToken(ctx)
 	if err != nil {
 		return authConfig, expiresIn, err
 	}

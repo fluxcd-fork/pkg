@@ -25,10 +25,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/ecr"
 	"github.com/google/go-containerregistry/pkg/authn"
-
-	"github.com/fluxcd/pkg/auth"
 )
 
 var registryPartRe = regexp.MustCompile(`([0-9+]*).dkr.ecr.([^/.]*)\.(amazonaws\.com[.cn]*)`)
@@ -46,8 +45,7 @@ func ParseRegistry(registry string) (accountId, awsEcrRegion string, ok bool) {
 
 // GetECRAuthConfig returns an AuthConfig that contains the credentials
 // required to authenticate against ECR to access the provided image.
-func GetECRAuthConfig(ctx context.Context, image string, authOptions *auth.AuthOptions,
-	providerOpts ...ProviderOptFunc) (authn.AuthConfig, time.Duration, error) {
+func (p *Provider) GetECRAuthConfig(ctx context.Context, image string) (authn.AuthConfig, time.Duration, error) {
 	var authConfig authn.AuthConfig
 	var expiresIn time.Duration
 
@@ -55,10 +53,9 @@ func GetECRAuthConfig(ctx context.Context, image string, authOptions *auth.AuthO
 	if !ok {
 		return authConfig, expiresIn, errors.New("failed to parse AWS ECR image, invalid ECR image")
 	}
-	providerOpts = append(providerOpts, WithRegion(awsEcrRegion))
+	p.optFns = append(p.optFns, config.WithRegion(awsEcrRegion))
 
-	provider := NewProvider(providerOpts...)
-	cfg, err := provider.GetConfig(ctx)
+	cfg, err := p.GetConfig(ctx)
 	if err != nil {
 		return authConfig, expiresIn, err
 	}

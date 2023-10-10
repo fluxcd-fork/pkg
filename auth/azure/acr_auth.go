@@ -28,27 +28,22 @@ import (
 	"strings"
 	"time"
 
-	"github.com/fluxcd/pkg/auth"
-
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/go-containerregistry/pkg/authn"
 )
 
 // GetACRAuthConfig returns an AuthConfig that contains the credentials
 // required to authenticate against ECR to access the provided image.
-func GetACRAuthConfig(ctx context.Context, image string, authOptions *auth.AuthOptions,
-	providerOpts ...ProviderOptFunc) (authn.AuthConfig, time.Duration, error) {
+func (p *Provider) GetACRAuthConfig(ctx context.Context, registry string) (authn.AuthConfig, time.Duration, error) {
 	var authConfig authn.AuthConfig
 	var expiresIn time.Duration
 
-	providerOpts = append(providerOpts, getCloudConfiguration(image))
-	provider := NewProvider(providerOpts...)
-	armToken, err := provider.GetResourceManagerToken(ctx)
+	armToken, err := p.GetResourceManagerToken(ctx)
 	if err != nil {
 		return authConfig, expiresIn, err
 	}
 
-	ex := newExchanger(image)
+	ex := newExchanger(registry)
 	refreshToken, err := ex.ExchangeACRAccessToken(string(armToken.Token))
 	if err != nil {
 		return authConfig, expiresIn, fmt.Errorf("failed to exchange token: %w", err)

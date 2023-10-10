@@ -27,7 +27,7 @@ import (
 	. "github.com/onsi/gomega"
 )
 
-func TestGetLoginAuth(t *testing.T) {
+func TestProvider_GetGCRAuthConfig(t *testing.T) {
 	tests := []struct {
 		name           string
 		responseBody   string
@@ -70,7 +70,8 @@ func TestGetLoginAuth(t *testing.T) {
 				srv.Close()
 			})
 
-			auth, expiry, err := GetGCRAuthConfig(context.TODO(), nil, WithTokenURL(srv.URL))
+			provider := NewProvider(WithTokenURL(srv.URL))
+			auth, expiry, err := provider.GetGCRAuthConfig(context.TODO())
 			if tt.wantErr {
 				g.Expect(err).To(HaveOccurred())
 			} else {

@@ -78,7 +78,7 @@ func TestParseRegistry(t *testing.T) {
 	}
 }
 
-func TestGetECRAuthConfig(t *testing.T) {
+func TestProvider_GetECRAuthConfig(t *testing.T) {
 	expiresAt := time.Now().Add(time.Hour)
 	tests := []struct {
 		name           string
@@ -162,7 +162,8 @@ func TestGetECRAuthConfig(t *testing.T) {
 			})
 			cfg.Credentials = credentials.NewStaticCredentialsProvider("x", "y", "z")
 
-			auth, expiry, err := GetECRAuthConfig(context.TODO(), "0123.dkr.ecr.us-east-1.amazonaws.com/foo:v1", nil, WithConfig(*cfg))
+			provider := NewProvider(WithConfig(*cfg))
+			auth, expiry, err := provider.GetECRAuthConfig(context.TODO(), "0123.dkr.ecr.us-east-1.amazonaws.com/foo:v1")
 			if tt.wantErr {
 				g.Expect(err).To(HaveOccurred())
 			} else {

@@ -24,12 +24,18 @@ import (
 	"net/http"
 )
 
-// GCP_TOKEN_URL is the default GCP metadata endpoint used for authentication.
-const GCP_TOKEN_URL = "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token"
+// SERVICE_ACCOUNT_TOKEN_URL is the default GCP metadata server endpoint to
+// fetch the access token for a GCP service account.
+const SERVICE_ACCOUNT_TOKEN_URL = "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token"
+
+// SERVICE_ACCOUNT_EMAIL_URL is the default GCP metadata server endpoint to
+// fetch the email for a GCP service account.
+const SERVICE_ACCOUNT_EMAIL_URL = "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/email"
 
 // Provider is an authentication provider for GCP.
 type Provider struct {
 	tokenURL string
+	emailURL string
 }
 
 type ProviderOptFunc func(*Provider)
@@ -45,6 +51,12 @@ func NewProvider(opts ...ProviderOptFunc) *Provider {
 func WithTokenURL(tokenURL string) ProviderOptFunc {
 	return func(p *Provider) {
 		p.tokenURL = tokenURL
+	}
+}
+
+func WithEmailURL(emailURL string) ProviderOptFunc {
+	return func(p *Provider) {
+		p.emailURL = emailURL
 	}
 }
 
@@ -64,7 +76,7 @@ type ServiceAccountToken struct {
 // the appropriate permissions.
 func (p *Provider) GetServiceAccountToken(ctx context.Context) (*ServiceAccountToken, error) {
 	if p.tokenURL == "" {
-		p.tokenURL = GCP_TOKEN_URL
+		p.tokenURL = SERVICE_ACCOUNT_TOKEN_URL
 	}
 
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, p.tokenURL, nil)
@@ -93,4 +105,39 @@ func (p *Provider) GetServiceAccountToken(ctx context.Context) (*ServiceAccountT
 	}
 
 	return &accessToken, nil
+}
+
+// GetServiceAccountEmail fetches the email for the service account
+// that the Pod is configured to run as, using Workload Identity.
+// Ref: https://cloud.google.com/kubernetes-engine/docs/concepts/workload-identity
+func (p *Provider) GetServiceAccountEmail(ctx context.Context) (string, error) {
+	if p.emailURL == "" {
+		p.emailURL = SERVICE_ACCOUNT_EMAIL_URL
+	}
+
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, p.emailURL, nil)
+	if err != nil {
+		return "", err
+	}
+
+	request.Header.Add("Metadata-Flavor", "Google")
+
+	client := &http.Client{}
+	response, err := client.Do(request)
+	if err != nil {
+		return "", err
+	}
+	defer response.Body.Close()
+	defer io.Copy(io.Discard, response.Body)
+
+	if response.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("unexpected status from metadata service: %s", response.Status)
+	}
+
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		return "", err
+	}
+
+	return string(body), nil
 }
