@@ -72,6 +72,11 @@ func (o *Options) BindFlags(fs *pflag.FlagSet) {
 // configured with the provided Options.
 func GetConfigOrDie(opts Options) *rest.Config {
 	config := ctrl.GetConfigOrDie()
+	if opts.QPS > 0 || opts.Burst > 0 {
+		config.QPS = opts.QPS
+		config.Burst = opts.Burst
+		return config
+	}
 	enabled, err := flowcontrol.IsEnabled(context.Background(), config)
 	if err == nil && enabled {
 		// A negative QPS and Burst indicates that the client should not have a rate limiter.
@@ -80,8 +85,6 @@ func GetConfigOrDie(opts Options) *rest.Config {
 		config.Burst = -1
 		return config
 	}
-	config.QPS = opts.QPS
-	config.Burst = opts.Burst
 	return config
 }
 
